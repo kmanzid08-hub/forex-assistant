@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timezone
+import random
 
 app = FastAPI()
 
@@ -43,6 +44,34 @@ def get_current_session():
         return "new_york"
     else:
         return "after_hours"
+
+
+def calculate_lot_size(
+    balance: float,
+    risk_percent: float,
+    stop_loss_pips: float,
+    pip_value_per_standard_lot: float = 10,
+):
+    risk_amount = balance * (risk_percent / 100)
+
+    if stop_loss_pips <= 0:
+        return {
+            "risk_amount": round(risk_amount, 2),
+            "standard_lots": 0,
+            "mini_lots": 0,
+            "micro_lots": 0,
+            "units": 0,
+        }
+
+    standard_lots = risk_amount / (stop_loss_pips * pip_value_per_standard_lot)
+
+    return {
+        "risk_amount": round(risk_amount, 2),
+        "standard_lots": round(standard_lots, 3),
+        "mini_lots": round(standard_lots * 10, 2),
+        "micro_lots": round(standard_lots * 100, 2),
+        "units": round(standard_lots * 100000),
+    }
 
 
 def get_market_analysis(symbol: str):
@@ -105,7 +134,6 @@ def get_market_analysis(symbol: str):
     elif trend == "bearish" and close_price < ema20:
         score += 20
 
-    # Choppy market detection
     ema_gap = abs(ema20 - ema50)
     choppy_market = ema_gap < (close_price * 0.0005)
 
@@ -150,7 +178,6 @@ def generate_coach_feedback(
 ):
     feedback = []
 
-    # Session awareness
     if session == "london":
         feedback.append("London session is active. This is usually a good session for forex movement.")
     elif session == "new_york":
@@ -160,7 +187,6 @@ def generate_coach_feedback(
     else:
         feedback.append("Market is outside major sessions. Liquidity may be weaker.")
 
-    # Trend feedback
     if trend == "neutral":
         feedback.append("Trend is neutral. Waiting may be better than entering now.")
     elif trend == "bullish":
@@ -168,7 +194,6 @@ def generate_coach_feedback(
     elif trend == "bearish":
         feedback.append("Trend is bearish. Prefer sell setups over buy setups.")
 
-    # Quality feedback
     if quality == "strong":
         feedback.append("Setup quality is strong. This is one of the better market conditions.")
     elif quality == "moderate":
@@ -176,7 +201,6 @@ def generate_coach_feedback(
     else:
         feedback.append("Setup quality is weak. This is usually better to skip.")
 
-    # Score feedback
     if score >= 75:
         feedback.append("Market structure score is strong.")
     elif score >= 50:
@@ -184,7 +208,6 @@ def generate_coach_feedback(
     else:
         feedback.append("Market structure score is low. The setup is not convincing.")
 
-    # Risk/reward feedback
     if rr_ratio >= 2:
         feedback.append("Risk/reward is solid.")
     elif rr_ratio >= 1.5:
@@ -192,27 +215,23 @@ def generate_coach_feedback(
     else:
         feedback.append("Risk/reward is poor. The trade may not be worth taking.")
 
-    # Stop size feedback
     if stop_loss_pips > 30:
-        feedback.append("Stop loss is wide. Position should be smaller or the trade should be skipped.")
+        feedback.append("Stop loss is wide. Lot size should be reduced.")
     elif stop_loss_pips < 8:
         feedback.append("Stop loss is very tight. The trade may get stopped out too easily.")
     else:
         feedback.append("Stop loss size looks reasonable.")
 
-    # Risk percent feedback
     if risk_percent > 1:
         feedback.append("Risk per trade is high. Consider risking 1% or less.")
     else:
         feedback.append("Risk per trade looks disciplined.")
 
-    # Choppy warning
     if choppy_market:
         feedback.append("Market looks choppy. False signals are more likely right now.")
     else:
         feedback.append("Market structure looks relatively clean.")
 
-    # Coach action
     if choppy_market or quality == "weak" or rr_ratio < 1.5:
         action = "skip"
     elif session == "after_hours":
@@ -267,6 +286,12 @@ def get_trade_advice(
 
         rr_ratio = take_profit_pips / stop_loss_pips
 
+        lot = calculate_lot_size(
+            balance=balance,
+            risk_percent=risk_percent,
+            stop_loss_pips=stop_loss_pips,
+        )
+
         if market["quality"] == "strong" and rr_ratio >= 2 and not market["choppy_market"]:
             verdict = "good setup"
         elif market["quality"] == "moderate" and rr_ratio >= 1.5 and not market["choppy_market"]:
@@ -302,6 +327,10 @@ def get_trade_advice(
             "take_profit_price": round(take_profit_price, 5),
             "take_profit_pips": round(take_profit_pips, 2),
             "risk_reward_ratio": round(rr_ratio, 2),
+            "standard_lots": lot["standard_lots"],
+            "mini_lots": lot["mini_lots"],
+            "micro_lots": lot["micro_lots"],
+            "units": lot["units"],
             "verdict": verdict,
             "coach_feedback": coach["coach_feedback"],
             "coach_action": coach["coach_action"],
@@ -352,6 +381,12 @@ def suggest_trade(pair: str, balance: float, risk_percent: float):
 
         rr_ratio = take_profit_pips / stop_loss_pips
 
+        lot = calculate_lot_size(
+            balance=balance,
+            risk_percent=risk_percent,
+            stop_loss_pips=stop_loss_pips,
+        )
+
         if market["quality"] == "strong" and rr_ratio >= 2 and not market["choppy_market"]:
             verdict = "good setup"
         elif market["quality"] == "moderate" and rr_ratio >= 1.5 and not market["choppy_market"]:
@@ -387,9 +422,100 @@ def suggest_trade(pair: str, balance: float, risk_percent: float):
             "suggested_take_profit_price": take_profit_price,
             "take_profit_pips": round(take_profit_pips, 2),
             "risk_reward_ratio": round(rr_ratio, 2),
+            "standard_lots": lot["standard_lots"],
+            "mini_lots": lot["mini_lots"],
+            "micro_lots": lot["micro_lots"],
+            "units": lot["units"],
             "verdict": verdict,
             "coach_feedback": coach["coach_feedback"],
             "coach_action": coach["coach_action"],
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/monte-carlo")
+def monte_carlo(
+    balance: float,
+    risk_percent: float,
+    win_rate: float,
+    risk_reward_ratio: float,
+    trades: int = 100,
+    simulations: int = 1000,
+):
+    try:
+        if balance <= 0:
+            return {"error": "Balance must be greater than zero"}
+
+        if risk_percent <= 0:
+            return {"error": "Risk percent must be greater than zero"}
+
+        if win_rate < 0 or win_rate > 100:
+            return {"error": "Win rate must be between 0 and 100"}
+
+        if risk_reward_ratio <= 0:
+            return {"error": "Risk/reward ratio must be greater than zero"}
+
+        if trades <= 0 or simulations <= 0:
+            return {"error": "Trades and simulations must be greater than zero"}
+
+        ending_balances = []
+        max_drawdowns = []
+
+        win_probability = win_rate / 100
+
+        for _ in range(simulations):
+            current_balance = balance
+            peak_balance = balance
+            max_drawdown = 0
+
+            for _ in range(trades):
+                risk_amount = current_balance * (risk_percent / 100)
+
+                if random.random() < win_probability:
+                    current_balance += risk_amount * risk_reward_ratio
+                else:
+                    current_balance -= risk_amount
+
+                if current_balance > peak_balance:
+                    peak_balance = current_balance
+
+                drawdown = (peak_balance - current_balance) / peak_balance
+                if drawdown > max_drawdown:
+                    max_drawdown = drawdown
+
+            ending_balances.append(current_balance)
+            max_drawdowns.append(max_drawdown * 100)
+
+        ending_balances.sort()
+        max_drawdowns.sort()
+
+        average_ending_balance = sum(ending_balances) / simulations
+        median_ending_balance = ending_balances[simulations // 2]
+        worst_ending_balance = ending_balances[0]
+        best_ending_balance = ending_balances[-1]
+
+        losing_runs = len([x for x in ending_balances if x < balance])
+        probability_of_loss = (losing_runs / simulations) * 100
+
+        average_drawdown = sum(max_drawdowns) / simulations
+        worst_drawdown = max_drawdowns[-1]
+
+        return {
+            "starting_balance": round(balance, 2),
+            "risk_percent": risk_percent,
+            "win_rate": win_rate,
+            "risk_reward_ratio": risk_reward_ratio,
+            "trades": trades,
+            "simulations": simulations,
+            "average_ending_balance": round(average_ending_balance, 2),
+            "median_ending_balance": round(median_ending_balance, 2),
+            "worst_ending_balance": round(worst_ending_balance, 2),
+            "best_ending_balance": round(best_ending_balance, 2),
+            "probability_of_loss_percent": round(probability_of_loss, 2),
+            "average_max_drawdown_percent": round(average_drawdown, 2),
+            "worst_max_drawdown_percent": round(worst_drawdown, 2),
         }
 
     except Exception as e:
@@ -426,7 +552,6 @@ def get_analytics():
         for trade in journal:
             verdict = trade.get("verdict", "")
             rr = trade.get("risk_reward_ratio", 0)
-
             total_rr += rr
 
             if verdict == "good setup":
