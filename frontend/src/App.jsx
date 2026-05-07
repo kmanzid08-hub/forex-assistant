@@ -1,30 +1,39 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function App() {
+  const [activePage, setActivePage] = useState("dashboard");
+
   const [pair, setPair] = useState("EURUSD=X");
   const [balance, setBalance] = useState(1000);
   const [riskPercent, setRiskPercent] = useState(1);
   const [entryPrice, setEntryPrice] = useState(1.1728);
   const [stopLossPrice, setStopLossPrice] = useState(1.1708);
-
   const [winRate, setWinRate] = useState(45);
-  const [mcTrades, setMcTrades] = useState(100);
-  const [mcSimulations, setMcSimulations] = useState(1000);
 
-  const [result, setResult] = useState(null);
   const [suggestion, setSuggestion] = useState(null);
   const [monteCarlo, setMonteCarlo] = useState(null);
+  const [journal, setJournal] = useState([]);
 
-  const [loadingAdvice, setLoadingAdvice] = useState(false);
   const [loadingSuggestion, setLoadingSuggestion] = useState(false);
   const [loadingMonteCarlo, setLoadingMonteCarlo] = useState(false);
-  const [savingManual, setSavingManual] = useState(false);
-  const [savingSuggestion, setSavingSuggestion] = useState(false);
-
+  const [loadingJournal, setLoadingJournal] = useState(false);
   const [error, setError] = useState("");
+
+  const markets = [
+    { label: "EUR/USD", value: "EURUSD=X", type: "Forex" },
+    { label: "GBP/USD", value: "GBPUSD=X", type: "Forex" },
+    { label: "USD/JPY", value: "USDJPY=X", type: "Forex" },
+    { label: "AUD/USD", value: "AUDUSD=X", type: "Forex" },
+    { label: "USD/CAD", value: "USDCAD=X", type: "Forex" },
+    { label: "USD/CHF", value: "USDCHF=X", type: "Forex" },
+    { label: "NZD/USD", value: "NZDUSD=X", type: "Forex" },
+    { label: "Gold / XAUUSD", value: "XAUUSD=X", type: "Gold" },
+  ];
+
+  const selectedMarket = markets.find((m) => m.value === pair);
 
   const runMonteCarloForTrade = async (rrRatio) => {
     setLoadingMonteCarlo(true);
@@ -36,53 +45,22 @@ function App() {
         risk_percent: riskPercent.toString(),
         win_rate: winRate.toString(),
         risk_reward_ratio: rrRatio.toString(),
-        trades: mcTrades.toString(),
-        simulations: mcSimulations.toString(),
+        trades: "100",
+        simulations: "1000",
       });
 
       const response = await fetch(`${API_URL}/monte-carlo?${params}`);
       const data = await response.json();
 
       if (!response.ok || data.error) {
-        throw new Error(data.error || "Monte Carlo failed");
+        throw new Error(data.error || "Monte Carlo simulation failed");
       }
 
       setMonteCarlo(data);
     } catch (err) {
-      setError(err.message || "Failed to run Monte Carlo");
+      setError(err.message || "Failed to run Monte Carlo simulation");
     } finally {
       setLoadingMonteCarlo(false);
-    }
-  };
-
-  const getAdvice = async () => {
-    setLoadingAdvice(true);
-    setError("");
-    setResult(null);
-    setMonteCarlo(null);
-
-    try {
-      const params = new URLSearchParams({
-        pair,
-        balance: balance.toString(),
-        risk_percent: riskPercent.toString(),
-        entry_price: entryPrice.toString(),
-        stop_loss_price: stopLossPrice.toString(),
-      });
-
-      const response = await fetch(`${API_URL}/advice?${params}`);
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "Something went wrong");
-      }
-
-      setResult(data);
-      await runMonteCarloForTrade(data.risk_reward_ratio);
-    } catch (err) {
-      setError(err.message || "Failed to fetch advice");
-    } finally {
-      setLoadingAdvice(false);
     }
   };
 
@@ -103,7 +81,7 @@ function App() {
       const data = await response.json();
 
       if (!response.ok || data.error) {
-        throw new Error(data.error || "Something went wrong");
+        throw new Error(data.error || "Unable to generate a trade setup");
       }
 
       setSuggestion(data);
@@ -118,310 +96,453 @@ function App() {
     }
   };
 
-  const saveTrade = async (tradeData, type) => {
-    if (!tradeData) return;
+  const fetchJournal = async () => {
+    setLoadingJournal(true);
+    setError("");
 
-    if (type === "manual") setSavingManual(true);
-    else setSavingSuggestion(true);
+    try {
+      const response = await fetch(`${API_URL}/journal`);
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Unable to fetch saved trades");
+      }
+
+      setJournal(data.trades || []);
+    } catch (err) {
+      setError(err.message || "Failed to load saved trades");
+    } finally {
+      setLoadingJournal(false);
+    }
+  };
+
+  const saveTrade = async () => {
+    if (!suggestion) return;
 
     try {
       const response = await fetch(`${API_URL}/journal`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tradeData),
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ...suggestion,
+          market_label: selectedMarket?.label || pair,
+          market_type: selectedMarket?.type || "Market",
+          saved_at: new Date().toLocaleString(),
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok || data.error) {
-        throw new Error(data.error || "Failed to save trade");
+        throw new Error(data.error || "Unable to save trade");
       }
 
-      alert("Trade saved!");
+      alert("Trade saved successfully");
+      fetchJournal();
     } catch (err) {
       alert(err.message || "Failed to save trade");
-    } finally {
-      if (type === "manual") setSavingManual(false);
-      else setSavingSuggestion(false);
     }
   };
 
+  useEffect(() => {
+    fetchJournal();
+  }, []);
+
   const getVerdictClass = (verdict) => {
-    if (verdict === "good setup") return "verdict-good";
-    if (verdict === "possible setup") return "verdict-medium";
-    return "verdict-bad";
+    if (verdict === "good setup") return "good";
+    if (verdict === "possible setup") return "medium";
+    return "bad";
   };
 
   const getTrendClass = (trend) => {
-    if (trend === "bullish") return "trend-bullish";
-    if (trend === "bearish") return "trend-bearish";
-    return "trend-neutral";
+    if (trend === "bullish") return "green";
+    if (trend === "bearish") return "red";
+    return "muted";
   };
 
   const getMonteCarloMessage = (mc) => {
     if (!mc) return "";
 
-    if (mc.probability_of_loss_percent <= 5 && mc.worst_max_drawdown_percent <= 25) {
-      return "Risk outlook looks acceptable. The simulation suggests the account has a good chance of growing if the assumed win rate is realistic.";
+    if (
+      mc.probability_of_loss_percent <= 5 &&
+      mc.worst_max_drawdown_percent <= 25
+    ) {
+      return "Risk outlook looks acceptable if the assumed win rate is realistic. The strategy still needs discipline and consistent execution.";
     }
 
-    if (mc.probability_of_loss_percent <= 20 && mc.worst_max_drawdown_percent <= 40) {
-      return "Risk outlook is moderate. The setup may still work, but the trader must be ready for drawdowns and losing streaks.";
+    if (
+      mc.probability_of_loss_percent <= 20 &&
+      mc.worst_max_drawdown_percent <= 40
+    ) {
+      return "Risk outlook is moderate. The trader should expect drawdowns and should avoid increasing lot size after losses.";
     }
 
-    return "Risk outlook is high. The simulation shows a meaningful chance of loss or heavy drawdown. Reduce risk or skip the setup.";
+    return "Risk outlook is high. Consider reducing risk, skipping the setup, or waiting for a cleaner trade.";
   };
 
-  const renderCoachBox = (data) => {
-    if (!data || !data.coach_feedback) return null;
+  const renderStat = (label, value, extraClass = "") => (
+    <div className="stat-card">
+      <span>{label}</span>
+      <strong className={extraClass}>{value ?? "-"}</strong>
+    </div>
+  );
 
-    return (
-      <div className="coach-box">
-        <div className="coach-title-row">
-          <h3>Coach Feedback</h3>
-          <span className="coach-action">{data.coach_action}</span>
+  const DashboardPage = () => (
+    <>
+      <section className="hero">
+        <div className="hero-content">
+          <p className="eyebrow">Forex & gold advisory system</p>
+          <h1>Trade cleaner. Size smarter. Avoid weak setups.</h1>
+          <p>
+            A polished decision-support dashboard for forex and gold traders,
+            combining trend analysis, risk-based lot sizing, saved trades, and
+            Monte Carlo risk simulation.
+          </p>
+
+          <div className="hero-actions">
+            <button className="primary-btn" onClick={() => setActivePage("assistant")}>
+              Open Assistant
+            </button>
+            <button className="ghost-btn" onClick={() => setActivePage("journal")}>
+              View Saved Trades
+            </button>
+          </div>
         </div>
 
-        <div className="coach-meta">
-          <span className="meta-pill">Session: {data.session}</span>
-          <span className={`meta-pill ${data.choppy_market ? "meta-warn" : "meta-ok"}`}>
-            {data.choppy_market ? "Choppy Market" : "Clean Structure"}
-          </span>
+        <div className="hero-visual">
+          <div className="orb"></div>
+
+          <div className="floating-card card-a">
+            <span>Markets</span>
+            <strong>Forex + Gold</strong>
+          </div>
+
+          <div className="floating-card card-b">
+            <span>Risk Engine</span>
+            <strong>Lot Size + MC</strong>
+          </div>
         </div>
+      </section>
 
-        <ul className="coach-list">
-          {data.coach_feedback.map((item, index) => (
-            <li key={index}>{item}</li>
-          ))}
-        </ul>
-      </div>
-    );
-  };
+      <section className="quick-stats">
+        {renderStat("Saved Trades", journal.length)}
+        {renderStat("Default Risk", `${riskPercent}%`)}
+        {renderStat("Expected Win Rate", `${winRate}%`)}
+        {renderStat("Markets", "Forex + Gold", "gold-text")}
+      </section>
+    </>
+  );
 
-  const renderTradeCards = (data, suggested = false) => {
-    if (!data) return null;
-
-    return (
-      <div className="grid">
-        <div className="stat-card">
-          <span className="label">Pair</span>
-          <span className="value">{data.pair}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Current Price</span>
-          <span className="value">{data.current_price}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Trend</span>
-          <span className={`value ${getTrendClass(data.trend)}`}>{data.trend}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Session</span>
-          <span className="value">{data.session}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Market State</span>
-          <span className="value">{data.choppy_market ? "Choppy" : "Clean"}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Score</span>
-          <span className="value">{data.score}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Quality</span>
-          <span className="value">{data.quality}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">{suggested ? "Suggested Entry" : "Entry Price"}</span>
-          <span className="value">
-            {suggested ? data.suggested_entry_price : data.entry_price}
-          </span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">{suggested ? "Suggested Stop Loss" : "Stop Loss Price"}</span>
-          <span className="value">
-            {suggested ? data.suggested_stop_loss_price : data.stop_loss_price}
-          </span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Stop Loss Pips</span>
-          <span className="value">{data.stop_loss_pips}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">{suggested ? "Suggested Take Profit" : "Take Profit Price"}</span>
-          <span className="value">
-            {suggested ? data.suggested_take_profit_price : data.take_profit_price}
-          </span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Risk / Reward</span>
-          <span className="value">{data.risk_reward_ratio}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Risk Amount</span>
-          <span className="value">{data.risk_amount}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Standard Lots</span>
-          <span className="value">{data.standard_lots}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Mini Lots</span>
-          <span className="value">{data.mini_lots}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Micro Lots</span>
-          <span className="value">{data.micro_lots}</span>
-        </div>
-
-        <div className="stat-card">
-          <span className="label">Units</span>
-          <span className="value">{data.units}</span>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="app">
-      <div className="header">
-        <h1>Forex Assistant</h1>
-        <p>Manual trading advisory dashboard</p>
+  const AssistantPage = () => (
+    <>
+      <div className="section-heading">
+        <p className="eyebrow">Trading assistant</p>
+        <h1>Generate a trade setup</h1>
+        <p>
+          Select a market, define your account size and risk, then let the
+          assistant generate a risk-controlled setup.
+        </p>
       </div>
 
-      <div className="form-card">
+      <div className="input-panel">
         <label>
-          Pair
-          <input value={pair} onChange={(e) => setPair(e.target.value)} />
+          Market
+          <select value={pair} onChange={(e) => setPair(e.target.value)}>
+            {markets.map((market) => (
+              <option key={market.value} value={market.value}>
+                {market.label}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label>
           Balance
-          <input type="number" value={balance} onChange={(e) => setBalance(Number(e.target.value))} />
+          <input
+            type="number"
+            value={balance}
+            onChange={(e) => setBalance(Number(e.target.value))}
+          />
         </label>
 
         <label>
           Risk %
-          <input type="number" step="0.1" value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value))} />
+          <input
+            type="number"
+            step="0.1"
+            value={riskPercent}
+            onChange={(e) => setRiskPercent(Number(e.target.value))}
+          />
         </label>
 
         <label>
           Expected Win Rate %
-          <input type="number" value={winRate} onChange={(e) => setWinRate(Number(e.target.value))} />
+          <input
+            type="number"
+            value={winRate}
+            onChange={(e) => setWinRate(Number(e.target.value))}
+          />
         </label>
 
         <label>
           Entry Price
-          <input type="number" step="0.00001" value={entryPrice} onChange={(e) => setEntryPrice(Number(e.target.value))} />
+          <input
+            type="number"
+            step="0.00001"
+            value={entryPrice}
+            onChange={(e) => setEntryPrice(Number(e.target.value))}
+          />
         </label>
 
         <label>
           Stop Loss Price
-          <input type="number" step="0.00001" value={stopLossPrice} onChange={(e) => setStopLossPrice(Number(e.target.value))} />
+          <input
+            type="number"
+            step="0.00001"
+            value={stopLossPrice}
+            onChange={(e) => setStopLossPrice(Number(e.target.value))}
+          />
         </label>
 
         <div className="button-row">
-          <button onClick={getSuggestion} disabled={loadingSuggestion || loadingMonteCarlo}>
-            {loadingSuggestion ? "Suggesting..." : "Suggest Trade"}
-          </button>
-
-          <button onClick={getAdvice} disabled={loadingAdvice || loadingMonteCarlo}>
-            {loadingAdvice ? "Analyzing..." : "Get Advice"}
+          <button
+            className="primary-btn"
+            onClick={getSuggestion}
+            disabled={loadingSuggestion || loadingMonteCarlo}
+          >
+            {loadingSuggestion ? "Analyzing Market..." : "Suggest Trade"}
           </button>
         </div>
-
-        {loadingMonteCarlo && <p>Running risk simulation...</p>}
       </div>
 
-      {error && <div className="error-box">Error: {error}</div>}
+      {error && <div className="error-box">{error}</div>}
+
+      {loadingMonteCarlo && (
+        <div className="glass-card pulse">Running risk simulation...</div>
+      )}
 
       {monteCarlo && (
-        <div className="result-card">
-          <div className="result-top">
-            <h2>Risk Simulation Summary</h2>
-            <span className="verdict-badge verdict-medium">Monte Carlo</span>
+        <div className="result-section">
+          <div className="section-heading compact">
+            <p className="eyebrow">Monte Carlo Simulation</p>
+            <h2>Risk Outlook</h2>
+            <p>{getMonteCarloMessage(monteCarlo)}</p>
           </div>
 
-          <p>{getMonteCarloMessage(monteCarlo)}</p>
-
-          <div className="grid">
-            <div className="stat-card">
-              <span className="label">Average Ending Balance</span>
-              <span className="value">{monteCarlo.average_ending_balance}</span>
-            </div>
-
-            <div className="stat-card">
-              <span className="label">Worst Ending Balance</span>
-              <span className="value">{monteCarlo.worst_ending_balance}</span>
-            </div>
-
-            <div className="stat-card">
-              <span className="label">Probability of Loss</span>
-              <span className="value">{monteCarlo.probability_of_loss_percent}%</span>
-            </div>
-
-            <div className="stat-card">
-              <span className="label">Worst Drawdown</span>
-              <span className="value">{monteCarlo.worst_max_drawdown_percent}%</span>
-            </div>
+          <div className="grid stats-grid">
+            {renderStat("Average Ending Balance", monteCarlo.average_ending_balance)}
+            {renderStat("Worst Ending Balance", monteCarlo.worst_ending_balance)}
+            {renderStat("Best Ending Balance", monteCarlo.best_ending_balance)}
+            {renderStat("Probability of Loss", `${monteCarlo.probability_of_loss_percent}%`)}
+            {renderStat("Worst Drawdown", `${monteCarlo.worst_max_drawdown_percent}%`)}
           </div>
         </div>
       )}
 
       {suggestion && (
-        <div className="result-card">
-          <div className="result-top">
-            <h2>Suggested Trade</h2>
-            <span className={`verdict-badge ${getVerdictClass(suggestion.verdict)}`}>
-              {suggestion.verdict}
-            </span>
-          </div>
+        <div className="result-section">
+          <div className="trade-layout">
+            <div className="trade-main-card">
+              <div className="card-title-row">
+                <div>
+                  <p className="eyebrow">
+                    {selectedMarket?.type || "Market"} setup
+                  </p>
+                  <h2>{selectedMarket?.label || suggestion.pair}</h2>
+                </div>
 
-          {renderTradeCards(suggestion, true)}
-          {renderCoachBox(suggestion)}
+                <span className={`verdict-pill ${getVerdictClass(suggestion.verdict)}`}>
+                  {suggestion.verdict}
+                </span>
+              </div>
 
-          <div className="save-row">
-            <button onClick={() => saveTrade(suggestion, "suggestion")} disabled={savingSuggestion}>
-              {savingSuggestion ? "Saving..." : "Save Suggested Trade"}
-            </button>
+              <div className="price-line">
+                <span>Current Price</span>
+                <strong>{suggestion.price}</strong>
+              </div>
+
+              <div className="grid stats-grid">
+                {renderStat("Trend", suggestion.trend, getTrendClass(suggestion.trend))}
+                {renderStat("Session", suggestion.session)}
+                {renderStat("Market State", suggestion.choppy_market ? "Choppy" : "Clean")}
+                {renderStat("Score", suggestion.score)}
+                {renderStat("Quality", suggestion.quality)}
+                {renderStat("Risk / Reward", suggestion.risk_reward_ratio)}
+              </div>
+
+              <div className="trade-map">
+                <div>
+                  <span>Entry</span>
+                  <strong>{suggestion.suggested_entry_price}</strong>
+                </div>
+
+                <div>
+                  <span>Stop Loss</span>
+                  <strong>{suggestion.suggested_stop_loss_price}</strong>
+                </div>
+
+                <div>
+                  <span>Take Profit</span>
+                  <strong>{suggestion.suggested_take_profit_price}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="side-stack">
+              <div className="glass-card">
+                <p className="eyebrow">Position size</p>
+                <div className="lot-big">{suggestion.standard_lots}</div>
+                <span>Standard lots</span>
+
+                <div className="mini-grid">
+                  {renderStat("Mini Lots", suggestion.mini_lots)}
+                  {renderStat("Micro Lots", suggestion.micro_lots)}
+                  {renderStat("Units", suggestion.units)}
+                  {renderStat("Risk Amount", suggestion.risk_amount)}
+                </div>
+              </div>
+
+              <div className="glass-card">
+                <p className="eyebrow">Coach action</p>
+                <h3>{suggestion.coach_action}</h3>
+                <p className="coach-note">
+                  The assistant gives a conservative signal based on trend,
+                  structure, session, and risk.
+                </p>
+              </div>
+
+              <button className="primary-btn" onClick={saveTrade}>
+                Save Trade
+              </button>
+            </div>
           </div>
         </div>
       )}
+    </>
+  );
 
-      {result && (
-        <div className="result-card">
-          <div className="result-top">
-            <h2>Manual Trade Advice</h2>
-            <span className={`verdict-badge ${getVerdictClass(result.verdict)}`}>
-              {result.verdict}
-            </span>
-          </div>
+  const JournalPage = () => (
+    <>
+      <div className="section-heading">
+        <p className="eyebrow">Saved trades</p>
+        <h1>Trade Journal</h1>
+        <p>
+          Review trades saved from the assistant and compare quality, risk,
+          position size, and market conditions.
+        </p>
+      </div>
 
-          {renderTradeCards(result, false)}
-          {renderCoachBox(result)}
+      <button className="secondary-btn refresh-btn" onClick={fetchJournal}>
+        {loadingJournal ? "Loading..." : "Refresh Saved Trades"}
+      </button>
 
-          <div className="save-row">
-            <button onClick={() => saveTrade(result, "manual")} disabled={savingManual}>
-              {savingManual ? "Saving..." : "Save Manual Trade"}
-            </button>
-          </div>
+      {journal.length === 0 ? (
+        <div className="empty-state">
+          <h2>No saved trades yet</h2>
+          <p>Save a trade from the assistant and it will appear here.</p>
+        </div>
+      ) : (
+        <div className="journal-grid">
+          {journal.map((trade, index) => (
+            <div className="journal-card" key={index}>
+              <div className="card-title-row">
+                <div>
+                  <p className="eyebrow">
+                    {trade.saved_at || `Trade ${index + 1}`}
+                  </p>
+                  <h3>{trade.market_label || trade.pair}</h3>
+                </div>
+
+                <span className={`verdict-pill ${getVerdictClass(trade.verdict)}`}>
+                  {trade.verdict}
+                </span>
+              </div>
+
+              <div className="mini-grid">
+                {renderStat("Trend", trade.trend)}
+                {renderStat("Score", trade.score)}
+                {renderStat("R/R", trade.risk_reward_ratio)}
+                {renderStat("Lots", trade.standard_lots)}
+                {renderStat("Risk", trade.risk_amount)}
+                {renderStat("Session", trade.session)}
+              </div>
+            </div>
+          ))}
         </div>
       )}
+    </>
+  );
+
+  const AboutPage = () => (
+    <div className="about-card">
+      <p className="eyebrow">About the platform</p>
+      <h1>How this assistant works</h1>
+
+      <p>
+        This app supports major forex pairs and gold. It analyzes the selected
+        market using moving averages, identifies trend quality, checks whether
+        conditions are choppy, calculates position size, and runs a Monte Carlo
+        simulation to estimate risk over many possible trade outcomes.
+      </p>
+
+      <p>
+        It is a decision-support tool. It does not execute trades automatically
+        and it does not guarantee profit. Demo testing is strongly recommended
+        before using it with real money.
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="logo">
+          <div className="logo-cube">FX</div>
+          <div>
+            <strong>Forex Assistant</strong>
+            <span>Forex + Gold</span>
+          </div>
+        </div>
+
+        <nav>
+          <button
+            className={activePage === "dashboard" ? "active" : ""}
+            onClick={() => setActivePage("dashboard")}
+          >
+            Dashboard
+          </button>
+
+          <button
+            className={activePage === "assistant" ? "active" : ""}
+            onClick={() => setActivePage("assistant")}
+          >
+            Trade Assistant
+          </button>
+
+          <button
+            className={activePage === "journal" ? "active" : ""}
+            onClick={() => setActivePage("journal")}
+          >
+            Saved Trades
+          </button>
+
+          <button
+            className={activePage === "about" ? "active" : ""}
+            onClick={() => setActivePage("about")}
+          >
+            About
+          </button>
+        </nav>
+      </aside>
+
+      <main className="main-content">
+        {activePage === "dashboard" && <DashboardPage />}
+        {activePage === "assistant" && <AssistantPage />}
+        {activePage === "journal" && <JournalPage />}
+        {activePage === "about" && <AboutPage />}
+      </main>
     </div>
   );
 }
