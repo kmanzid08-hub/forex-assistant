@@ -30,7 +30,7 @@ function App() {
     { label: "USD/CAD", value: "USDCAD=X", type: "Forex" },
     { label: "USD/CHF", value: "USDCHF=X", type: "Forex" },
     { label: "NZD/USD", value: "NZDUSD=X", type: "Forex" },
-    { label: "Gold / XAUUSD", value: "XAUUSD=X", type: "Gold" },
+    { label: "Gold / XAUUSD", value: "GC=F", type: "Gold" },
   ];
 
   const selectedMarket = markets.find((m) => m.value === pair);
