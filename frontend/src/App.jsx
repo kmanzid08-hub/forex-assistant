@@ -162,6 +162,19 @@ function App() {
     return "muted";
   };
 
+  const getNewsClass = (risk) => {
+    if (risk === "high") return "red";
+    return "green";
+  };
+
+  const getNewsMessage = (data) => {
+    return data?.news_warning || "No major rule-based news risk detected right now.";
+  };
+
+  const getNewsRisk = (data) => {
+    return data?.news_risk || "normal";
+  };
+
   const getMonteCarloMessage = (mc) => {
     if (!mc) return "";
 
@@ -193,12 +206,12 @@ function App() {
     <>
       <section className="hero">
         <div className="hero-content">
-          <p className="eyebrow">Forex & gold advisory system</p>
-          <h1>Trade cleaner. Size smarter. Avoid weak setups.</h1>
+          <p className="eyebrow">Forex, gold & macro risk assistant</p>
+          <h1>Trade cleaner. Size smarter. Avoid news traps.</h1>
           <p>
             A polished decision-support dashboard for forex and gold traders,
-            combining trend analysis, risk-based lot sizing, saved trades, and
-            Monte Carlo risk simulation.
+            combining trend analysis, risk-based lot sizing, saved trades,
+            Monte Carlo simulation, and macro-news risk filtering.
           </p>
 
           <div className="hero-actions">
@@ -221,7 +234,7 @@ function App() {
 
           <div className="floating-card card-b">
             <span>Risk Engine</span>
-            <strong>Lot Size + MC</strong>
+            <strong>Lot + News Filter</strong>
           </div>
         </div>
       </section>
@@ -242,7 +255,7 @@ function App() {
         <h1>Generate a trade setup</h1>
         <p>
           Select a market, define your account size and risk, then let the
-          assistant generate a risk-controlled setup.
+          assistant generate a risk-controlled setup and check macro-news risk.
         </p>
       </div>
 
@@ -367,9 +380,18 @@ function App() {
                 {renderStat("Trend", suggestion.trend, getTrendClass(suggestion.trend))}
                 {renderStat("Session", suggestion.session)}
                 {renderStat("Market State", suggestion.choppy_market ? "Choppy" : "Clean")}
+                {renderStat("News Risk", getNewsRisk(suggestion), getNewsClass(getNewsRisk(suggestion)))}
                 {renderStat("Score", suggestion.score)}
                 {renderStat("Quality", suggestion.quality)}
                 {renderStat("Risk / Reward", suggestion.risk_reward_ratio)}
+              </div>
+
+              <div
+                className={`news-box ${
+                  getNewsRisk(suggestion) === "high" ? "news-high" : "news-normal"
+                }`}
+              >
+                <strong>Macro News Filter:</strong> {getNewsMessage(suggestion)}
               </div>
 
               <div className="trade-map">
@@ -407,10 +429,11 @@ function App() {
               <div className="glass-card">
                 <p className="eyebrow">Coach action</p>
                 <h3>{suggestion.coach_action}</h3>
-                <p className="coach-note">
-                  The assistant gives a conservative signal based on trend,
-                  structure, session, and risk.
-                </p>
+                <ul className="coach-list">
+                  {(suggestion.coach_feedback || []).map((item, index) => (
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
               </div>
 
               <button className="primary-btn" onClick={saveTrade}>
@@ -430,7 +453,7 @@ function App() {
         <h1>Trade Journal</h1>
         <p>
           Review trades saved from the assistant and compare quality, risk,
-          position size, and market conditions.
+          position size, market conditions, and news risk.
         </p>
       </div>
 
@@ -466,7 +489,7 @@ function App() {
                 {renderStat("R/R", trade.risk_reward_ratio)}
                 {renderStat("Lots", trade.standard_lots)}
                 {renderStat("Risk", trade.risk_amount)}
-                {renderStat("Session", trade.session)}
+                {renderStat("News Risk", trade.news_risk || "normal")}
               </div>
             </div>
           ))}
@@ -485,6 +508,12 @@ function App() {
         market using moving averages, identifies trend quality, checks whether
         conditions are choppy, calculates position size, and runs a Monte Carlo
         simulation to estimate risk over many possible trade outcomes.
+      </p>
+
+      <p>
+        It also includes a rule-based macro-news risk filter. This does not replace
+        a live economic calendar, but it helps warn the trader during common
+        high-risk USD news windows.
       </p>
 
       <p>

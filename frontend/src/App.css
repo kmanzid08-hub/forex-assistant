@@ -635,4 +635,33 @@ button:disabled {
   .card-title-row {
     flex-direction: column;
   }
+  .news-box {
+    margin-top: 18px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    line-height: 1.6;
+  }
+
+
+  .news-high {
+    background: rgba(239, 68, 68, 0.16);
+    border: 1px solid rgba(248, 113, 113, 0.38);
+    color: #fecaca;
+  }
+
+  .news-normal {
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(74, 222, 128, 0.28);
+    color: #bbf7d0;
+  }
+
+  .coach-list {
+    color: var(--text-muted);
+    line-height: 1.6;
+    padding-left: 20px;
+  }
+
+  .coach-list li {
+    margin-bottom: 8px;
+  }
 }
