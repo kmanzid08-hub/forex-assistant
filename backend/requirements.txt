@@ -39,4 +39,5 @@ urllib3==2.6.3
 uvicorn==0.44.0
 websockets==16.0
 yfinance==1.2.1
+requests
 python-dotenv
