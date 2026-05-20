@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -12,6 +12,7 @@ import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const LOCAL_JOURNAL_KEY = "forex_assistant_saved_trades";
+const PAPER_TRADES_KEY = "forex_assistant_paper_trades";
 
 function App() {
   const [activePage, setActivePage] = useState("dashboard");
@@ -28,10 +29,18 @@ function App() {
   const [journal, setJournal] = useState([]);
   const [chartData, setChartData] = useState([]);
 
+  const [paperTrades, setPaperTrades] = useState([]);
+  const [paperRunning, setPaperRunning] = useState(false);
+  const [paperBalance, setPaperBalance] = useState(1000);
+  const [paperLog, setPaperLog] = useState([]);
+
   const [loadingSuggestion, setLoadingSuggestion] = useState(false);
   const [loadingMonteCarlo, setLoadingMonteCarlo] = useState(false);
   const [loadingChart, setLoadingChart] = useState(false);
+  const [loadingPaperScan, setLoadingPaperScan] = useState(false);
   const [error, setError] = useState("");
+
+  const paperIntervalRef = useRef(null);
 
   const markets = [
     { label: "EUR/USD", value: "EURUSD=X", type: "Forex" },
@@ -42,6 +51,13 @@ function App() {
     { label: "USD/CHF", value: "USDCHF=X", type: "Forex" },
     { label: "NZD/USD", value: "NZDUSD=X", type: "Forex" },
     { label: "Gold / XAUUSD", value: "GC=F", type: "Gold" },
+  ];
+
+  const autoScanMarkets = [
+    { label: "EUR/USD", value: "EURUSD=X" },
+    { label: "GBP/USD", value: "GBPUSD=X" },
+    { label: "USD/JPY", value: "USDJPY=X" },
+    { label: "Gold / XAUUSD", value: "GC=F" },
   ];
 
   const selectedMarket = markets.find((m) => m.value === pair);
@@ -55,11 +71,59 @@ function App() {
         setJournal([]);
       }
     }
+
+    const savedPaper = localStorage.getItem(PAPER_TRADES_KEY);
+    if (savedPaper) {
+      try {
+        const parsed = JSON.parse(savedPaper);
+        setPaperTrades(parsed.trades || []);
+        setPaperBalance(parsed.balance || 1000);
+        setPaperLog(parsed.log || []);
+      } catch {
+        setPaperTrades([]);
+        setPaperBalance(1000);
+        setPaperLog([]);
+      }
+    }
+
+    return () => {
+      if (paperIntervalRef.current) {
+        clearInterval(paperIntervalRef.current);
+      }
+    };
   }, []);
 
   const saveJournalToLocalStorage = (trades) => {
     localStorage.setItem(LOCAL_JOURNAL_KEY, JSON.stringify(trades));
     setJournal(trades);
+  };
+
+  const savePaperToLocalStorage = (trades, newBalance, log) => {
+    localStorage.setItem(
+      PAPER_TRADES_KEY,
+      JSON.stringify({
+        trades,
+        balance: newBalance,
+        log,
+      })
+    );
+
+    setPaperTrades(trades);
+    setPaperBalance(newBalance);
+    setPaperLog(log);
+  };
+
+  const addPaperLog = (message) => {
+    const newLog = [
+      {
+        id: crypto.randomUUID(),
+        time: new Date().toLocaleString(),
+        message,
+      },
+      ...paperLog,
+    ].slice(0, 50);
+
+    savePaperToLocalStorage(paperTrades, paperBalance, newLog);
   };
 
   const runMonteCarloForTrade = async (rrRatio) => {
@@ -145,6 +209,23 @@ function App() {
     }
   };
 
+  const getSuggestionForMarket = async (marketPair) => {
+    const params = new URLSearchParams({
+      pair: marketPair,
+      balance: paperBalance.toString(),
+      risk_percent: riskPercent.toString(),
+    });
+
+    const response = await fetch(`${API_URL}/suggest?${params}`);
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      return null;
+    }
+
+    return data;
+  };
+
   const saveTrade = () => {
     if (!suggestion) return;
 
@@ -212,7 +293,281 @@ function App() {
     };
   };
 
+  const getPaperAnalytics = () => {
+    const closed = paperTrades.filter((t) => t.status !== "open");
+    const open = paperTrades.filter((t) => t.status === "open");
+    const wins = closed.filter((t) => t.status === "win");
+    const losses = closed.filter((t) => t.status === "loss");
+
+    const totalProfit = closed.reduce((sum, t) => sum + Number(t.pnl || 0), 0);
+    const winRateValue = closed.length > 0 ? (wins.length / closed.length) * 100 : 0;
+
+    const grossProfit = wins.reduce((sum, t) => sum + Number(t.pnl || 0), 0);
+    const grossLoss = Math.abs(losses.reduce((sum, t) => sum + Number(t.pnl || 0), 0));
+
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? grossProfit : 0;
+
+    const consecutiveLosses = getConsecutiveLosses();
+
+    return {
+      total: paperTrades.length,
+      open: open.length,
+      closed: closed.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: winRateValue.toFixed(1),
+      totalProfit: totalProfit.toFixed(2),
+      profitFactor: profitFactor.toFixed(2),
+      consecutiveLosses,
+    };
+  };
+
+  const getConsecutiveLosses = () => {
+    let count = 0;
+
+    const closedTrades = paperTrades.filter((t) => t.status !== "open");
+
+    for (const trade of closedTrades) {
+      if (trade.status === "loss") {
+        count += 1;
+      } else {
+        break;
+      }
+    }
+
+    return count;
+  };
+
+  const getDailyLoss = () => {
+    const losses = paperTrades
+      .filter((t) => t.status === "loss")
+      .reduce((sum, trade) => sum + Math.abs(Number(trade.pnl || 0)), 0);
+
+    return losses;
+  };
+
+  const canOpenMorePaperTrades = () => {
+    const openTrades = paperTrades.filter((t) => t.status === "open");
+    const consecutiveLosses = getConsecutiveLosses();
+    const dailyLoss = getDailyLoss();
+
+    if (openTrades.length >= 2) {
+      return {
+        allowed: false,
+        reason: "Maximum open paper trades reached.",
+      };
+    }
+
+    if (consecutiveLosses >= 3) {
+      return {
+        allowed: false,
+        reason: "Kill switch active: 3 consecutive losses reached.",
+      };
+    }
+
+    if (dailyLoss >= 20) {
+      return {
+        allowed: false,
+        reason: "Kill switch active: simulated loss reached 2% of $1,000.",
+      };
+    }
+
+    return {
+      allowed: true,
+      reason: "Risk checks passed.",
+    };
+  };
+
+  const isStrictPaperSetup = (setup) => {
+    return (
+      setup &&
+      setup.verdict === "good setup" &&
+      Number(setup.score) >= 75 &&
+      setup.choppy_market === false &&
+      (setup.news_risk || "normal") === "normal" &&
+      Number(setup.risk_reward_ratio) >= 2 &&
+      ["london", "new_york"].includes(setup.session)
+    );
+  };
+
+  const updateOpenPaperTrades = async () => {
+    let updatedTrades = [...paperTrades];
+    let newBalance = paperBalance;
+    let changed = false;
+    let newLog = [...paperLog];
+
+    const openTrades = updatedTrades.filter((trade) => trade.status === "open");
+
+    for (const trade of openTrades) {
+      const latest = await getSuggestionForMarket(trade.pair);
+
+      if (!latest || !latest.price) continue;
+
+      const price = Number(latest.price);
+      const entry = Number(trade.entry);
+      const stop = Number(trade.stopLoss);
+      const takeProfit = Number(trade.takeProfit);
+
+      let closedStatus = null;
+
+      if (trade.direction === "buy") {
+        if (price <= stop) closedStatus = "loss";
+        if (price >= takeProfit) closedStatus = "win";
+      }
+
+      if (trade.direction === "sell") {
+        if (price >= stop) closedStatus = "loss";
+        if (price <= takeProfit) closedStatus = "win";
+      }
+
+      if (closedStatus) {
+        const pnl =
+          closedStatus === "win"
+            ? Number(trade.riskAmount) * Number(trade.riskRewardRatio)
+            : -Number(trade.riskAmount);
+
+        newBalance += pnl;
+
+        updatedTrades = updatedTrades.map((item) =>
+          item.id === trade.id
+            ? {
+                ...item,
+                status: closedStatus,
+                exitPrice: price,
+                pnl: Number(pnl.toFixed(2)),
+                closedAt: new Date().toLocaleString(),
+              }
+            : item
+        );
+
+        newLog = [
+          {
+            id: crypto.randomUUID(),
+            time: new Date().toLocaleString(),
+            message: `${closedStatus.toUpperCase()} closed on ${trade.marketLabel}. P/L: ${pnl.toFixed(2)}`,
+          },
+          ...newLog,
+        ].slice(0, 50);
+
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      savePaperToLocalStorage(updatedTrades, Number(newBalance.toFixed(2)), newLog);
+    }
+  };
+
+  const runPaperScan = async () => {
+    setLoadingPaperScan(true);
+
+    try {
+      await updateOpenPaperTrades();
+
+      const riskCheck = canOpenMorePaperTrades();
+
+      if (!riskCheck.allowed) {
+        addPaperLog(riskCheck.reason);
+        return;
+      }
+
+      for (const market of autoScanMarkets) {
+        const setup = await getSuggestionForMarket(market.value);
+
+        if (!setup) continue;
+
+        if (!isStrictPaperSetup(setup)) {
+          continue;
+        }
+
+        const alreadyOpen = paperTrades.some(
+          (trade) => trade.status === "open" && trade.pair === setup.pair
+        );
+
+        if (alreadyOpen) {
+          continue;
+        }
+
+        const direction = setup.trend === "bullish" ? "buy" : "sell";
+
+        const newTrade = {
+          id: crypto.randomUUID(),
+          pair: setup.pair,
+          marketLabel: market.label,
+          direction,
+          status: "open",
+          entry: setup.suggested_entry_price,
+          stopLoss: setup.suggested_stop_loss_price,
+          takeProfit: setup.suggested_take_profit_price,
+          riskAmount: setup.risk_amount,
+          riskRewardRatio: setup.risk_reward_ratio,
+          standardLots: setup.standard_lots,
+          score: setup.score,
+          quality: setup.quality,
+          newsRisk: setup.news_risk,
+          openedAt: new Date().toLocaleString(),
+        };
+
+        const updatedTrades = [newTrade, ...paperTrades];
+
+        const newLog = [
+          {
+            id: crypto.randomUUID(),
+            time: new Date().toLocaleString(),
+            message: `Opened simulated ${direction.toUpperCase()} on ${market.label}.`,
+          },
+          ...paperLog,
+        ].slice(0, 50);
+
+        savePaperToLocalStorage(updatedTrades, paperBalance, newLog);
+        break;
+      }
+    } catch (err) {
+      addPaperLog(`Paper scan error: ${err.message || "Unknown error"}`);
+    } finally {
+      setLoadingPaperScan(false);
+    }
+  };
+
+  const startPaperTrader = () => {
+    if (paperIntervalRef.current) {
+      clearInterval(paperIntervalRef.current);
+    }
+
+    setPaperRunning(true);
+    addPaperLog("Auto Paper Trader started.");
+    runPaperScan();
+
+    paperIntervalRef.current = setInterval(() => {
+      runPaperScan();
+    }, 60000);
+  };
+
+  const stopPaperTrader = () => {
+    if (paperIntervalRef.current) {
+      clearInterval(paperIntervalRef.current);
+    }
+
+    paperIntervalRef.current = null;
+    setPaperRunning(false);
+    addPaperLog("Auto Paper Trader stopped.");
+  };
+
+  const resetPaperTrader = () => {
+    const confirmed = window.confirm("Reset all paper trades and paper balance?");
+    if (!confirmed) return;
+
+    if (paperIntervalRef.current) {
+      clearInterval(paperIntervalRef.current);
+    }
+
+    paperIntervalRef.current = null;
+    setPaperRunning(false);
+    savePaperToLocalStorage([], 1000, []);
+  };
+
   const analytics = getJournalAnalytics();
+  const paperAnalytics = getPaperAnalytics();
 
   const getVerdictClass = (verdict) => {
     if (verdict === "good setup") return "good";
@@ -326,14 +681,17 @@ function App() {
           <p className="eyebrow">Forex, gold & macro risk assistant</p>
           <h1>Trade cleaner. Size smarter. Avoid news traps.</h1>
           <p>
-            A polished decision-support dashboard for forex and gold traders,
-            combining trend analysis, risk-based lot sizing, saved trades,
-            Monte Carlo simulation, macro-news risk filtering, and live market charts.
+            A decision-support dashboard for forex and gold traders, combining
+            trend analysis, risk-based lot sizing, saved trades, Monte Carlo
+            simulation, macro-news filtering, charts, and paper automation.
           </p>
 
           <div className="hero-actions">
             <button className="primary-btn" onClick={() => setActivePage("assistant")}>
               Open Assistant
+            </button>
+            <button className="ghost-btn" onClick={() => setActivePage("paper")}>
+              Auto Paper Trader
             </button>
             <button className="ghost-btn" onClick={() => setActivePage("journal")}>
               View Saved Trades
@@ -351,15 +709,15 @@ function App() {
 
           <div className="floating-card card-b">
             <span>Risk Engine</span>
-            <strong>Lot + Chart</strong>
+            <strong>Paper + Chart</strong>
           </div>
         </div>
       </section>
 
       <section className="quick-stats">
         {renderStat("Saved Trades", analytics.total)}
-        {renderStat("Good Setups", analytics.good)}
-        {renderStat("Average R/R", analytics.averageRR)}
+        {renderStat("Paper Balance", paperBalance.toFixed(2))}
+        {renderStat("Paper Win Rate", `${paperAnalytics.winRate}%`)}
         {renderStat("Markets", "Forex + Gold", "gold-text")}
       </section>
     </>
@@ -530,6 +888,115 @@ function App() {
     </>
   );
 
+  const PaperTraderPage = () => (
+    <>
+      <div className="section-heading">
+        <p className="eyebrow">Auto paper trader</p>
+        <h1>Automatic simulated trading</h1>
+        <p>
+          This scans selected markets and opens simulated trades only when strict
+          risk filters are passed. It does not place real broker trades.
+        </p>
+      </div>
+
+      <section className="quick-stats">
+        {renderStat("Paper Balance", paperBalance.toFixed(2))}
+        {renderStat("Open Trades", paperAnalytics.open)}
+        {renderStat("Closed Trades", paperAnalytics.closed)}
+        {renderStat("Win Rate", `${paperAnalytics.winRate}%`)}
+        {renderStat("Total P/L", paperAnalytics.totalProfit, Number(paperAnalytics.totalProfit) >= 0 ? "green" : "red")}
+        {renderStat("Profit Factor", paperAnalytics.profitFactor)}
+        {renderStat("Consecutive Losses", paperAnalytics.consecutiveLosses)}
+      </section>
+
+      <div className="hero-actions">
+        {!paperRunning ? (
+          <button className="primary-btn" onClick={startPaperTrader}>
+            Start Auto Paper Trader
+          </button>
+        ) : (
+          <button className="secondary-btn" onClick={stopPaperTrader}>
+            Stop Auto Paper Trader
+          </button>
+        )}
+
+        <button className="secondary-btn" onClick={runPaperScan} disabled={loadingPaperScan}>
+          {loadingPaperScan ? "Scanning..." : "Run One Scan"}
+        </button>
+
+        <button className="ghost-btn" onClick={resetPaperTrader}>
+          Reset Paper Trader
+        </button>
+      </div>
+
+      <div className="result-section">
+        <div className="section-heading compact">
+          <p className="eyebrow">Strict entry rules</p>
+          <h2>Trade only if all filters pass</h2>
+          <p>
+            Good setup, score ≥ 75, not choppy, normal news risk, R/R ≥ 2, and
+            London or New York session.
+          </p>
+        </div>
+
+        {paperTrades.length === 0 ? (
+          <div className="empty-state">
+            <h2>No paper trades yet</h2>
+            <p>Start the scanner or run one scan to begin simulated trading.</p>
+          </div>
+        ) : (
+          <div className="journal-grid">
+            {paperTrades.map((trade) => (
+              <div className="journal-card" key={trade.id}>
+                <div className="card-title-row">
+                  <div>
+                    <p className="eyebrow">{trade.openedAt}</p>
+                    <h3>{trade.marketLabel}</h3>
+                  </div>
+
+                  <span className={`verdict-pill ${trade.status === "win" ? "good" : trade.status === "loss" ? "bad" : "medium"}`}>
+                    {trade.status}
+                  </span>
+                </div>
+
+                <div className="mini-grid">
+                  {renderStat("Direction", trade.direction)}
+                  {renderStat("Entry", trade.entry)}
+                  {renderStat("SL", trade.stopLoss)}
+                  {renderStat("TP", trade.takeProfit)}
+                  {renderStat("Lots", trade.standardLots)}
+                  {renderStat("P/L", trade.pnl ?? "-")}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="result-section">
+        <div className="section-heading compact">
+          <p className="eyebrow">Paper trader log</p>
+          <h2>Latest actions</h2>
+        </div>
+
+        {paperLog.length === 0 ? (
+          <div className="empty-state">
+            <p>No log entries yet.</p>
+          </div>
+        ) : (
+          <div className="journal-grid">
+            {paperLog.map((log) => (
+              <div className="journal-card" key={log.id}>
+                <p className="eyebrow">{log.time}</p>
+                <p>{log.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   const JournalPage = () => (
     <>
       <div className="section-heading">
@@ -603,14 +1070,14 @@ function App() {
       <p>
         This app supports major forex pairs and gold. It analyzes the selected
         market using moving averages, checks whether conditions are choppy,
-        calculates position size, runs Monte Carlo simulation, and now displays
-        a live market chart with EMA lines and trade levels.
+        calculates position size, runs Monte Carlo simulation, displays a live
+        market chart, and includes an automatic paper-trading engine.
       </p>
 
       <p>
-        It is a decision-support tool. It does not execute trades automatically
-        and it does not guarantee profit. Demo testing is strongly recommended
-        before using it with real money.
+        The Auto Paper Trader does not execute real trades. It is designed to
+        test whether the strategy is worth considering before any demo or live
+        broker integration.
       </p>
     </div>
   );
@@ -635,6 +1102,10 @@ function App() {
             Trade Assistant
           </button>
 
+          <button className={activePage === "paper" ? "active" : ""} onClick={() => setActivePage("paper")}>
+            Auto Paper Trader
+          </button>
+
           <button className={activePage === "journal" ? "active" : ""} onClick={() => setActivePage("journal")}>
             Saved Trades
           </button>
@@ -648,6 +1119,7 @@ function App() {
       <main className="main-content">
         {activePage === "dashboard" && <DashboardPage />}
         {activePage === "assistant" && <AssistantPage />}
+        {activePage === "paper" && <PaperTraderPage />}
         {activePage === "journal" && <JournalPage />}
         {activePage === "about" && <AboutPage />}
       </main>
