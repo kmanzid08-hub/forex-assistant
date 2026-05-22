@@ -4,12 +4,6 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime, timezone
 import random
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-FMP_API_KEY = os.getenv("FMP_API_KEY")
 
 app = FastAPI()
 
@@ -41,10 +35,8 @@ def is_gold(symbol: str) -> bool:
 
 def normalize_symbol(symbol: str) -> str:
     symbol = symbol.upper()
-
     if symbol in ["XAUUSD=X", "XAUUSD", "GOLD"]:
         return "GC=F"
-
     return symbol
 
 
@@ -54,54 +46,32 @@ def get_gold_symbols_to_try():
 
 def get_pip_size(symbol: str) -> float:
     symbol = symbol.upper()
-
     if is_gold(symbol):
         return 0.01
-
     if "JPY" in symbol:
         return 0.01
-
     return 0.0001
 
 
 def get_pip_value_per_standard_lot(symbol: str) -> float:
     if is_gold(symbol):
         return 1
-
     return 10
 
 
 def get_current_session():
     now_utc = datetime.now(timezone.utc)
-    hour = now_utc.hour
+    return get_session_from_hour(now_utc.hour)
 
+
+def get_session_from_hour(hour: int):
     if 0 <= hour < 7:
         return "asia"
-
     if 7 <= hour < 12:
         return "london"
-
     if 12 <= hour < 21:
         return "new_york"
-
     return "after_hours"
-
-
-def get_market_currencies(symbol: str):
-    symbol = symbol.upper()
-
-    if is_gold(symbol):
-        return ["USD"]
-
-    cleaned = symbol.replace("=X", "")
-
-    if len(cleaned) >= 6:
-        return [cleaned[:3], cleaned[3:6]]
-
-    if "USD" in symbol:
-        return ["USD"]
-
-    return []
 
 
 def get_rule_based_news_risk(symbol: str):
@@ -212,6 +182,27 @@ def download_market_data(symbol: str, period: str = "5d", interval: str = "15m")
     return data, used_symbol, symbols_to_try
 
 
+def add_indicators(data: pd.DataFrame):
+    data = data.copy()
+
+    data["EMA20"] = data["Close"].ewm(span=20, adjust=False).mean()
+    data["EMA50"] = data["Close"].ewm(span=50, adjust=False).mean()
+    data["EMA200"] = data["Close"].ewm(span=200, adjust=False).mean()
+
+    data["PREV_EMA20"] = data["EMA20"].shift(1)
+    data["PREV_EMA50"] = data["EMA50"].shift(1)
+
+    high_low = data["High"] - data["Low"]
+    high_close = (data["High"] - data["Close"].shift(1)).abs()
+    low_close = (data["Low"] - data["Close"].shift(1)).abs()
+
+    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    data["ATR14"] = true_range.rolling(14).mean()
+    data["ATR_PCT"] = data["ATR14"] / data["Close"]
+
+    return data
+
+
 def prepare_market_data(symbol: str, period: str = "5d", interval: str = "15m"):
     data, used_symbol, symbols_to_try = download_market_data(symbol, period, interval)
 
@@ -231,9 +222,7 @@ def prepare_market_data(symbol: str, period: str = "5d", interval: str = "15m"):
             "data_source": used_symbol,
         }
 
-    data["EMA20"] = data["Close"].ewm(span=20, adjust=False).mean()
-    data["EMA50"] = data["Close"].ewm(span=50, adjust=False).mean()
-    data["EMA200"] = data["Close"].ewm(span=200, adjust=False).mean()
+    data = add_indicators(data)
 
     return data, None
 
@@ -321,9 +310,7 @@ def generate_coach_feedback(
     news_warning: str,
     avoid_due_to_news: bool,
 ):
-    feedback = []
-
-    feedback.append(news_warning)
+    feedback = [news_warning]
 
     if session == "london":
         feedback.append("London session is active. This is usually a good session for forex and gold movement.")
@@ -416,7 +403,6 @@ def chart_data(pair: str):
             return error
 
         chart_rows = []
-
         recent_data = data.tail(120)
 
         for index, row in recent_data.iterrows():
@@ -537,90 +523,202 @@ def suggest_trade(pair: str, balance: float, risk_percent: float):
         return {"error": str(e)}
 
 
-@app.get("/advice")
-def get_trade_advice(
+@app.get("/backtest")
+def backtest(
     pair: str,
-    balance: float,
-    risk_percent: float,
-    entry_price: float,
-    stop_loss_price: float,
+    balance: float = 1000,
+    risk_percent: float = 1,
+    period: str = "60d",
+    interval: str = "1h",
+    cooldown_candles: int = 8,
+    max_holding_candles: int = 12,
 ):
     try:
         symbol = pair.upper()
-        market = get_market_analysis(symbol)
+        data, error = prepare_market_data(symbol, period=period, interval=interval)
 
-        if "error" in market:
-            return market
-
-        news = get_live_news_risk(symbol)
+        if error:
+            return error
 
         pip_size = get_pip_size(symbol)
 
-        stop_loss_pips = abs(entry_price - stop_loss_price) / pip_size
+        equity = balance
+        peak = balance
+        max_drawdown = 0
 
-        if stop_loss_pips == 0:
-            return {"error": "Invalid stop loss distance"}
+        trades = []
+        equity_curve = []
 
-        take_profit_pips = stop_loss_pips * 2
+        cooldown_until = 0
 
-        if market["trend"] == "bullish":
-            take_profit_price = entry_price + (take_profit_pips * pip_size)
-        else:
-            take_profit_price = entry_price - (take_profit_pips * pip_size)
+        atr_min = 0.0003
+        atr_max = 0.006
 
-        rr_ratio = 2
+        if is_gold(symbol):
+            atr_min = 0.0005
+            atr_max = 0.012
 
-        lot = calculate_lot_size(
-            balance=balance,
-            risk_percent=risk_percent,
-            stop_loss_pips=stop_loss_pips,
-            pip_value_per_standard_lot=get_pip_value_per_standard_lot(symbol),
-        )
+        start_index = 220
 
-        if news["avoid_due_to_news"]:
-            verdict = "avoid for now"
-        elif market["quality"] == "strong" and not market["choppy_market"]:
-            verdict = "good setup"
-        elif market["quality"] == "moderate" and not market["choppy_market"]:
-            verdict = "possible setup"
-        else:
-            verdict = "avoid for now"
+        for i in range(start_index, len(data) - max_holding_candles):
+            if i < cooldown_until:
+                continue
 
-        coach = generate_coach_feedback(
-            trend=market["trend"],
-            quality=market["quality"],
-            score=market["score"],
-            stop_loss_pips=stop_loss_pips,
-            rr_ratio=rr_ratio,
-            risk_percent=risk_percent,
-            session=market["session"],
-            choppy_market=market["choppy_market"],
-            news_risk=news["news_risk"],
-            news_warning=news["news_warning"],
-            avoid_due_to_news=news["avoid_due_to_news"],
-        )
+            row = data.iloc[i]
+            timestamp = data.index[i]
+            session = get_session_from_hour(timestamp.hour)
+
+            if session not in ["london", "new_york"]:
+                continue
+
+            close = float(row["Close"])
+            high = float(row["High"])
+            low = float(row["Low"])
+            ema20 = float(row["EMA20"])
+            ema50 = float(row["EMA50"])
+            ema200 = float(row["EMA200"])
+            prev_ema20 = float(row["PREV_EMA20"])
+            prev_ema50 = float(row["PREV_EMA50"])
+            atr_pct = float(row["ATR_PCT"]) if pd.notna(row["ATR_PCT"]) else 0
+
+            if atr_pct < atr_min or atr_pct > atr_max:
+                continue
+
+            buy_cross = prev_ema20 <= prev_ema50 and ema20 > ema50 and ema50 > ema200
+            sell_cross = prev_ema20 >= prev_ema50 and ema20 < ema50 and ema50 < ema200
+
+            if buy_cross and close > ema20:
+                direction = "buy"
+                entry = close
+                stop = min(ema50, low) - (5 * pip_size)
+                take_profit = entry + (abs(entry - stop) * 2)
+            elif sell_cross and close < ema20:
+                direction = "sell"
+                entry = close
+                stop = max(ema50, high) + (5 * pip_size)
+                take_profit = entry - (abs(entry - stop) * 2)
+            else:
+                continue
+
+            stop_loss_pips = abs(entry - stop) / pip_size
+
+            if stop_loss_pips < 8:
+                continue
+
+            risk_amount = equity * (risk_percent / 100)
+
+            result = None
+            exit_price = None
+            exit_index = None
+
+            future = data.iloc[i + 1 : i + 1 + max_holding_candles]
+
+            for j, future_row in future.iterrows():
+                future_high = float(future_row["High"])
+                future_low = float(future_row["Low"])
+
+                if direction == "buy":
+                    if future_low <= stop:
+                        result = "loss"
+                        exit_price = stop
+                        exit_index = str(j)
+                        break
+                    if future_high >= take_profit:
+                        result = "win"
+                        exit_price = take_profit
+                        exit_index = str(j)
+                        break
+
+                if direction == "sell":
+                    if future_high >= stop:
+                        result = "loss"
+                        exit_price = stop
+                        exit_index = str(j)
+                        break
+                    if future_low <= take_profit:
+                        result = "win"
+                        exit_price = take_profit
+                        exit_index = str(j)
+                        break
+
+            if result is None:
+                final_row = future.iloc[-1]
+                exit_price = float(final_row["Close"])
+                exit_index = str(future.index[-1])
+
+                if direction == "buy":
+                    pnl_multiple = (exit_price - entry) / abs(entry - stop)
+                else:
+                    pnl_multiple = (entry - exit_price) / abs(entry - stop)
+
+                pnl = risk_amount * pnl_multiple
+                result = "win" if pnl > 0 else "loss"
+            else:
+                pnl = risk_amount * 2 if result == "win" else -risk_amount
+
+            equity += pnl
+
+            if equity > peak:
+                peak = equity
+
+            drawdown = ((peak - equity) / peak) * 100
+            max_drawdown = max(max_drawdown, drawdown)
+
+            trades.append(
+                {
+                    "time": str(timestamp),
+                    "exit_time": exit_index,
+                    "pair": symbol,
+                    "direction": direction,
+                    "entry": round(entry, 5),
+                    "stop_loss": round(stop, 5),
+                    "take_profit": round(take_profit, 5),
+                    "exit_price": round(exit_price, 5),
+                    "result": result,
+                    "pnl": round(pnl, 2),
+                    "equity": round(equity, 2),
+                    "session": session,
+                    "atr_pct": round(atr_pct, 5),
+                }
+            )
+
+            equity_curve.append(
+                {
+                    "time": str(timestamp),
+                    "equity": round(equity, 2),
+                }
+            )
+
+            cooldown_until = i + cooldown_candles
+
+        total_trades = len(trades)
+        wins = len([t for t in trades if t["result"] == "win"])
+        losses = len([t for t in trades if t["result"] == "loss"])
+
+        gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
+        gross_loss = abs(sum(t["pnl"] for t in trades if t["pnl"] < 0))
+
+        win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else gross_profit
 
         return {
-            **market,
-            "balance": balance,
-            "risk_percent": risk_percent,
-            "risk_amount": lot["risk_amount"],
-            "entry_price": entry_price,
-            "stop_loss_price": stop_loss_price,
-            "take_profit_price": round(take_profit_price, 5),
-            "stop_loss_pips": round(stop_loss_pips, 2),
-            "risk_reward_ratio": rr_ratio,
-            "standard_lots": lot["standard_lots"],
-            "mini_lots": lot["mini_lots"],
-            "micro_lots": lot["micro_lots"],
-            "units": lot["units"],
-            "news_risk": news["news_risk"],
-            "news_warning": news["news_warning"],
-            "avoid_due_to_news": news["avoid_due_to_news"],
-            "upcoming_events": news.get("upcoming_events", []),
-            "verdict": verdict,
-            "coach_feedback": coach["coach_feedback"],
-            "coach_action": coach["coach_action"],
+            "pair": symbol,
+            "period": period,
+            "interval": interval,
+            "strategy": "EMA crossover + cooldown + ATR filter + session filter",
+            "starting_balance": round(balance, 2),
+            "ending_balance": round(equity, 2),
+            "total_profit": round(equity - balance, 2),
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(win_rate, 2),
+            "profit_factor": round(profit_factor, 2),
+            "max_drawdown_percent": round(max_drawdown, 2),
+            "cooldown_candles": cooldown_candles,
+            "max_holding_candles": max_holding_candles,
+            "equity_curve": equity_curve[-200:],
+            "recent_trades": trades[-25:],
         }
 
     except Exception as e:
@@ -694,10 +792,7 @@ def monte_carlo(
 @app.post("/journal")
 def save_trade(trade: dict):
     journal.append(trade)
-    return {
-        "message": "Trade saved",
-        "total_trades": len(journal),
-    }
+    return {"message": "Trade saved", "total_trades": len(journal)}
 
 
 @app.get("/journal")

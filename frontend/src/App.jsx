@@ -53,12 +53,8 @@ function App() {
     { label: "Gold / XAUUSD", value: "GC=F", type: "Gold" },
   ];
 
-  const autoScanMarkets = [
-    { label: "EUR/USD", value: "EURUSD=X" },
-    { label: "GBP/USD", value: "GBPUSD=X" },
-    { label: "USD/JPY", value: "USDJPY=X" },
-    { label: "Gold / XAUUSD", value: "GC=F" },
-  ];
+  // Based on the latest backtests, Auto Paper Trader is restricted to EUR/USD only.
+  const autoScanMarkets = [{ label: "EUR/USD", value: "EURUSD=X" }];
 
   const selectedMarket = markets.find((m) => m.value === pair);
 
@@ -101,11 +97,7 @@ function App() {
   const savePaperToLocalStorage = (trades, newBalance, log) => {
     localStorage.setItem(
       PAPER_TRADES_KEY,
-      JSON.stringify({
-        trades,
-        balance: newBalance,
-        log,
-      })
+      JSON.stringify({ trades, balance: newBalance, log })
     );
 
     setPaperTrades(trades);
@@ -163,9 +155,7 @@ function App() {
       const response = await fetch(`${API_URL}/chart-data?pair=${pair}`);
       const data = await response.json();
 
-      if (!response.ok || data.error) {
-        return;
-      }
+      if (!response.ok || data.error) return;
 
       setChartData(data.data || []);
     } catch (err) {
@@ -219,9 +209,7 @@ function App() {
     const response = await fetch(`${API_URL}/suggest?${params}`);
     const data = await response.json();
 
-    if (!response.ok || data.error) {
-      return null;
-    }
+    if (!response.ok || data.error) return null;
 
     return data;
   };
@@ -259,29 +247,15 @@ function App() {
     const total = journal.length;
 
     if (total === 0) {
-      return {
-        total: 0,
-        good: 0,
-        possible: 0,
-        avoided: 0,
-        averageRR: 0,
-        averageLots: 0,
-      };
+      return { total: 0, good: 0, possible: 0, avoided: 0, averageRR: 0, averageLots: 0 };
     }
 
     const good = journal.filter((t) => t.verdict === "good setup").length;
     const possible = journal.filter((t) => t.verdict === "possible setup").length;
     const avoided = journal.filter((t) => t.verdict === "avoid for now").length;
 
-    const totalRR = journal.reduce(
-      (sum, trade) => sum + Number(trade.risk_reward_ratio || 0),
-      0
-    );
-
-    const totalLots = journal.reduce(
-      (sum, trade) => sum + Number(trade.standard_lots || 0),
-      0
-    );
+    const totalRR = journal.reduce((sum, trade) => sum + Number(trade.risk_reward_ratio || 0), 0);
+    const totalLots = journal.reduce((sum, trade) => sum + Number(trade.standard_lots || 0), 0);
 
     return {
       total,
@@ -304,10 +278,7 @@ function App() {
 
     const grossProfit = wins.reduce((sum, t) => sum + Number(t.pnl || 0), 0);
     const grossLoss = Math.abs(losses.reduce((sum, t) => sum + Number(t.pnl || 0), 0));
-
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? grossProfit : 0;
-
-    const consecutiveLosses = getConsecutiveLosses();
 
     return {
       total: paperTrades.length,
@@ -318,32 +289,26 @@ function App() {
       winRate: winRateValue.toFixed(1),
       totalProfit: totalProfit.toFixed(2),
       profitFactor: profitFactor.toFixed(2),
-      consecutiveLosses,
+      consecutiveLosses: getConsecutiveLosses(),
     };
   };
 
   const getConsecutiveLosses = () => {
     let count = 0;
-
     const closedTrades = paperTrades.filter((t) => t.status !== "open");
 
     for (const trade of closedTrades) {
-      if (trade.status === "loss") {
-        count += 1;
-      } else {
-        break;
-      }
+      if (trade.status === "loss") count += 1;
+      else break;
     }
 
     return count;
   };
 
   const getDailyLoss = () => {
-    const losses = paperTrades
+    return paperTrades
       .filter((t) => t.status === "loss")
       .reduce((sum, trade) => sum + Math.abs(Number(trade.pnl || 0)), 0);
-
-    return losses;
   };
 
   const canOpenMorePaperTrades = () => {
@@ -352,30 +317,18 @@ function App() {
     const dailyLoss = getDailyLoss();
 
     if (openTrades.length >= 2) {
-      return {
-        allowed: false,
-        reason: "Maximum open paper trades reached.",
-      };
+      return { allowed: false, reason: "Maximum open paper trades reached." };
     }
 
     if (consecutiveLosses >= 3) {
-      return {
-        allowed: false,
-        reason: "Kill switch active: 3 consecutive losses reached.",
-      };
+      return { allowed: false, reason: "Kill switch active: 3 consecutive losses reached." };
     }
 
     if (dailyLoss >= 20) {
-      return {
-        allowed: false,
-        reason: "Kill switch active: simulated loss reached 2% of $1,000.",
-      };
+      return { allowed: false, reason: "Kill switch active: simulated loss reached 2% of $1,000." };
     }
 
-    return {
-      allowed: true,
-      reason: "Risk checks passed.",
-    };
+    return { allowed: true, reason: "Risk checks passed." };
   };
 
   const isStrictPaperSetup = (setup) => {
@@ -400,11 +353,9 @@ function App() {
 
     for (const trade of openTrades) {
       const latest = await getSuggestionForMarket(trade.pair);
-
       if (!latest || !latest.price) continue;
 
       const price = Number(latest.price);
-      const entry = Number(trade.entry);
       const stop = Number(trade.stopLoss);
       const takeProfit = Number(trade.takeProfit);
 
@@ -421,10 +372,9 @@ function App() {
       }
 
       if (closedStatus) {
-        const pnl =
-          closedStatus === "win"
-            ? Number(trade.riskAmount) * Number(trade.riskRewardRatio)
-            : -Number(trade.riskAmount);
+        const pnl = closedStatus === "win"
+          ? Number(trade.riskAmount) * Number(trade.riskRewardRatio)
+          : -Number(trade.riskAmount);
 
         newBalance += pnl;
 
@@ -465,7 +415,6 @@ function App() {
       await updateOpenPaperTrades();
 
       const riskCheck = canOpenMorePaperTrades();
-
       if (!riskCheck.allowed) {
         addPaperLog(riskCheck.reason);
         return;
@@ -473,10 +422,10 @@ function App() {
 
       for (const market of autoScanMarkets) {
         const setup = await getSuggestionForMarket(market.value);
-
         if (!setup) continue;
 
         if (!isStrictPaperSetup(setup)) {
+          addPaperLog(`${market.label} skipped: setup did not pass strict rules.`);
           continue;
         }
 
@@ -484,9 +433,7 @@ function App() {
           (trade) => trade.status === "open" && trade.pair === setup.pair
         );
 
-        if (alreadyOpen) {
-          continue;
-        }
+        if (alreadyOpen) continue;
 
         const direction = setup.trend === "bullish" ? "buy" : "sell";
 
@@ -509,7 +456,6 @@ function App() {
         };
 
         const updatedTrades = [newTrade, ...paperTrades];
-
         const newLog = [
           {
             id: crypto.randomUUID(),
@@ -530,12 +476,10 @@ function App() {
   };
 
   const startPaperTrader = () => {
-    if (paperIntervalRef.current) {
-      clearInterval(paperIntervalRef.current);
-    }
+    if (paperIntervalRef.current) clearInterval(paperIntervalRef.current);
 
     setPaperRunning(true);
-    addPaperLog("Auto Paper Trader started.");
+    addPaperLog("Auto Paper Trader started. Scanning EUR/USD only based on backtest results.");
     runPaperScan();
 
     paperIntervalRef.current = setInterval(() => {
@@ -544,9 +488,7 @@ function App() {
   };
 
   const stopPaperTrader = () => {
-    if (paperIntervalRef.current) {
-      clearInterval(paperIntervalRef.current);
-    }
+    if (paperIntervalRef.current) clearInterval(paperIntervalRef.current);
 
     paperIntervalRef.current = null;
     setPaperRunning(false);
@@ -557,9 +499,7 @@ function App() {
     const confirmed = window.confirm("Reset all paper trades and paper balance?");
     if (!confirmed) return;
 
-    if (paperIntervalRef.current) {
-      clearInterval(paperIntervalRef.current);
-    }
+    if (paperIntervalRef.current) clearInterval(paperIntervalRef.current);
 
     paperIntervalRef.current = null;
     setPaperRunning(false);
@@ -581,33 +521,22 @@ function App() {
     return "muted";
   };
 
-  const getNewsClass = (risk) => {
-    if (risk === "high") return "red";
-    return "green";
-  };
+  const getNewsClass = (risk) => (risk === "high" ? "red" : "green");
 
   const getNewsMessage = (data) => {
     return data?.news_warning || "No major rule-based news risk detected right now.";
   };
 
-  const getNewsRisk = (data) => {
-    return data?.news_risk || "normal";
-  };
+  const getNewsRisk = (data) => data?.news_risk || "normal";
 
   const getMonteCarloMessage = (mc) => {
     if (!mc) return "";
 
-    if (
-      mc.probability_of_loss_percent <= 5 &&
-      mc.worst_max_drawdown_percent <= 25
-    ) {
+    if (mc.probability_of_loss_percent <= 5 && mc.worst_max_drawdown_percent <= 25) {
       return "Risk outlook looks acceptable if the assumed win rate is realistic. The strategy still needs discipline and consistent execution.";
     }
 
-    if (
-      mc.probability_of_loss_percent <= 20 &&
-      mc.worst_max_drawdown_percent <= 40
-    ) {
+    if (mc.probability_of_loss_percent <= 20 && mc.worst_max_drawdown_percent <= 40) {
       return "Risk outlook is moderate. The trader should expect drawdowns and should avoid increasing lot size after losses.";
     }
 
@@ -622,23 +551,11 @@ function App() {
   );
 
   const MarketChart = () => {
-    if (loadingChart) {
-      return <div className="glass-card pulse">Loading market chart...</div>;
-    }
-
-    if (!chartData || chartData.length === 0 || !suggestion) {
-      return null;
-    }
+    if (loadingChart) return <div className="glass-card pulse">Loading market chart...</div>;
+    if (!chartData || chartData.length === 0 || !suggestion) return null;
 
     return (
-      <div
-        className="glass-card"
-        style={{
-          marginTop: 24,
-          height: 460,
-          padding: 22,
-        }}
-      >
+      <div className="glass-card" style={{ marginTop: 24, height: 460, padding: 22 }}>
         <div className="card-title-row">
           <div>
             <p className="eyebrow">Market chart</p>
@@ -681,36 +598,22 @@ function App() {
           <p className="eyebrow">Forex, gold & macro risk assistant</p>
           <h1>Trade cleaner. Size smarter. Avoid news traps.</h1>
           <p>
-            A decision-support dashboard for forex and gold traders, combining
-            trend analysis, risk-based lot sizing, saved trades, Monte Carlo
-            simulation, macro-news filtering, charts, and paper automation.
+            A decision-support dashboard for forex and gold traders, combining trend analysis,
+            risk-based lot sizing, saved trades, Monte Carlo simulation, macro-news filtering,
+            charts, and paper automation.
           </p>
 
           <div className="hero-actions">
-            <button className="primary-btn" onClick={() => setActivePage("assistant")}>
-              Open Assistant
-            </button>
-            <button className="ghost-btn" onClick={() => setActivePage("paper")}>
-              Auto Paper Trader
-            </button>
-            <button className="ghost-btn" onClick={() => setActivePage("journal")}>
-              View Saved Trades
-            </button>
+            <button className="primary-btn" onClick={() => setActivePage("assistant")}>Open Assistant</button>
+            <button className="ghost-btn" onClick={() => setActivePage("paper")}>Auto Paper Trader</button>
+            <button className="ghost-btn" onClick={() => setActivePage("journal")}>View Saved Trades</button>
           </div>
         </div>
 
         <div className="hero-visual">
           <div className="orb"></div>
-
-          <div className="floating-card card-a">
-            <span>Markets</span>
-            <strong>Forex + Gold</strong>
-          </div>
-
-          <div className="floating-card card-b">
-            <span>Risk Engine</span>
-            <strong>Paper + Chart</strong>
-          </div>
+          <div className="floating-card card-a"><span>Markets</span><strong>EUR/USD Focus</strong></div>
+          <div className="floating-card card-b"><span>Risk Engine</span><strong>Paper + Chart</strong></div>
         </div>
       </section>
 
@@ -718,7 +621,7 @@ function App() {
         {renderStat("Saved Trades", analytics.total)}
         {renderStat("Paper Balance", paperBalance.toFixed(2))}
         {renderStat("Paper Win Rate", `${paperAnalytics.winRate}%`)}
-        {renderStat("Markets", "Forex + Gold", "gold-text")}
+        {renderStat("Auto Market", "EUR/USD", "gold-text")}
       </section>
     </>
   );
@@ -728,48 +631,22 @@ function App() {
       <div className="section-heading">
         <p className="eyebrow">Trading assistant</p>
         <h1>Generate a trade setup</h1>
-        <p>
-          Select a market, define your account size and risk, then let the
-          assistant generate a risk-controlled setup and show the chart.
-        </p>
+        <p>Select a market, define account size and risk, then generate a risk-controlled setup and chart.</p>
       </div>
 
       <div className="input-panel">
         <label>
           Market
           <select value={pair} onChange={(e) => setPair(e.target.value)}>
-            {markets.map((market) => (
-              <option key={market.value} value={market.value}>
-                {market.label}
-              </option>
-            ))}
+            {markets.map((market) => <option key={market.value} value={market.value}>{market.label}</option>)}
           </select>
         </label>
 
-        <label>
-          Balance
-          <input type="number" value={balance} onChange={(e) => setBalance(Number(e.target.value))} />
-        </label>
-
-        <label>
-          Risk %
-          <input type="number" step="0.1" value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value))} />
-        </label>
-
-        <label>
-          Expected Win Rate %
-          <input type="number" value={winRate} onChange={(e) => setWinRate(Number(e.target.value))} />
-        </label>
-
-        <label>
-          Entry Price
-          <input type="number" step="0.00001" value={entryPrice} onChange={(e) => setEntryPrice(Number(e.target.value))} />
-        </label>
-
-        <label>
-          Stop Loss Price
-          <input type="number" step="0.00001" value={stopLossPrice} onChange={(e) => setStopLossPrice(Number(e.target.value))} />
-        </label>
+        <label>Balance<input type="number" value={balance} onChange={(e) => setBalance(Number(e.target.value))} /></label>
+        <label>Risk %<input type="number" step="0.1" value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value))} /></label>
+        <label>Expected Win Rate %<input type="number" value={winRate} onChange={(e) => setWinRate(Number(e.target.value))} /></label>
+        <label>Entry Price<input type="number" step="0.00001" value={entryPrice} onChange={(e) => setEntryPrice(Number(e.target.value))} /></label>
+        <label>Stop Loss Price<input type="number" step="0.00001" value={stopLossPrice} onChange={(e) => setStopLossPrice(Number(e.target.value))} /></label>
 
         <div className="button-row">
           <button className="primary-btn" onClick={getSuggestion} disabled={loadingSuggestion || loadingMonteCarlo}>
@@ -779,7 +656,6 @@ function App() {
       </div>
 
       {error && <div className="error-box">{error}</div>}
-
       {loadingMonteCarlo && <div className="glass-card pulse">Running risk simulation...</div>}
 
       {monteCarlo && (
@@ -789,7 +665,6 @@ function App() {
             <h2>Risk Outlook</h2>
             <p>{getMonteCarloMessage(monteCarlo)}</p>
           </div>
-
           <div className="grid stats-grid">
             {renderStat("Average Ending Balance", monteCarlo.average_ending_balance)}
             {renderStat("Worst Ending Balance", monteCarlo.worst_ending_balance)}
@@ -809,16 +684,10 @@ function App() {
                   <p className="eyebrow">{selectedMarket?.type || "Market"} setup</p>
                   <h2>{selectedMarket?.label || suggestion.pair}</h2>
                 </div>
-
-                <span className={`verdict-pill ${getVerdictClass(suggestion.verdict)}`}>
-                  {suggestion.verdict}
-                </span>
+                <span className={`verdict-pill ${getVerdictClass(suggestion.verdict)}`}>{suggestion.verdict}</span>
               </div>
 
-              <div className="price-line">
-                <span>Current Price</span>
-                <strong>{suggestion.price}</strong>
-              </div>
+              <div className="price-line"><span>Current Price</span><strong>{suggestion.price}</strong></div>
 
               <div className="grid stats-grid">
                 {renderStat("Trend", suggestion.trend, getTrendClass(suggestion.trend))}
@@ -835,20 +704,9 @@ function App() {
               </div>
 
               <div className="trade-map">
-                <div>
-                  <span>Entry</span>
-                  <strong>{suggestion.suggested_entry_price}</strong>
-                </div>
-
-                <div>
-                  <span>Stop Loss</span>
-                  <strong>{suggestion.suggested_stop_loss_price}</strong>
-                </div>
-
-                <div>
-                  <span>Take Profit</span>
-                  <strong>{suggestion.suggested_take_profit_price}</strong>
-                </div>
+                <div><span>Entry</span><strong>{suggestion.suggested_entry_price}</strong></div>
+                <div><span>Stop Loss</span><strong>{suggestion.suggested_stop_loss_price}</strong></div>
+                <div><span>Take Profit</span><strong>{suggestion.suggested_take_profit_price}</strong></div>
               </div>
 
               <MarketChart />
@@ -859,7 +717,6 @@ function App() {
                 <p className="eyebrow">Position size</p>
                 <div className="lot-big">{suggestion.standard_lots}</div>
                 <span>Standard lots</span>
-
                 <div className="mini-grid">
                   {renderStat("Mini Lots", suggestion.mini_lots)}
                   {renderStat("Micro Lots", suggestion.micro_lots)}
@@ -872,15 +729,11 @@ function App() {
                 <p className="eyebrow">Coach action</p>
                 <h3>{suggestion.coach_action}</h3>
                 <ul className="coach-list">
-                  {(suggestion.coach_feedback || []).map((item, index) => (
-                    <li key={index}>{item}</li>
-                  ))}
+                  {(suggestion.coach_feedback || []).map((item, index) => <li key={index}>{item}</li>)}
                 </ul>
               </div>
 
-              <button className="primary-btn" onClick={saveTrade}>
-                Save Trade
-              </button>
+              <button className="primary-btn" onClick={saveTrade}>Save Trade</button>
             </div>
           </div>
         </div>
@@ -894,8 +747,7 @@ function App() {
         <p className="eyebrow">Auto paper trader</p>
         <h1>Automatic simulated trading</h1>
         <p>
-          This scans selected markets and opens simulated trades only when strict
-          risk filters are passed. It does not place real broker trades.
+          This scans EUR/USD only, based on the latest backtest results. It opens simulated trades only when strict risk filters pass.
         </p>
       </div>
 
@@ -911,54 +763,35 @@ function App() {
 
       <div className="hero-actions">
         {!paperRunning ? (
-          <button className="primary-btn" onClick={startPaperTrader}>
-            Start Auto Paper Trader
-          </button>
+          <button className="primary-btn" onClick={startPaperTrader}>Start Auto Paper Trader</button>
         ) : (
-          <button className="secondary-btn" onClick={stopPaperTrader}>
-            Stop Auto Paper Trader
-          </button>
+          <button className="secondary-btn" onClick={stopPaperTrader}>Stop Auto Paper Trader</button>
         )}
 
         <button className="secondary-btn" onClick={runPaperScan} disabled={loadingPaperScan}>
           {loadingPaperScan ? "Scanning..." : "Run One Scan"}
         </button>
 
-        <button className="ghost-btn" onClick={resetPaperTrader}>
-          Reset Paper Trader
-        </button>
+        <button className="ghost-btn" onClick={resetPaperTrader}>Reset Paper Trader</button>
       </div>
 
       <div className="result-section">
         <div className="section-heading compact">
           <p className="eyebrow">Strict entry rules</p>
           <h2>Trade only if all filters pass</h2>
-          <p>
-            Good setup, score ≥ 75, not choppy, normal news risk, R/R ≥ 2, and
-            London or New York session.
-          </p>
+          <p>Good setup, score ≥ 75, not choppy, normal news risk, R/R ≥ 2, and London or New York session.</p>
         </div>
 
         {paperTrades.length === 0 ? (
-          <div className="empty-state">
-            <h2>No paper trades yet</h2>
-            <p>Start the scanner or run one scan to begin simulated trading.</p>
-          </div>
+          <div className="empty-state"><h2>No paper trades yet</h2><p>Start the scanner or run one scan to begin simulated trading.</p></div>
         ) : (
           <div className="journal-grid">
             {paperTrades.map((trade) => (
               <div className="journal-card" key={trade.id}>
                 <div className="card-title-row">
-                  <div>
-                    <p className="eyebrow">{trade.openedAt}</p>
-                    <h3>{trade.marketLabel}</h3>
-                  </div>
-
-                  <span className={`verdict-pill ${trade.status === "win" ? "good" : trade.status === "loss" ? "bad" : "medium"}`}>
-                    {trade.status}
-                  </span>
+                  <div><p className="eyebrow">{trade.openedAt}</p><h3>{trade.marketLabel}</h3></div>
+                  <span className={`verdict-pill ${trade.status === "win" ? "good" : trade.status === "loss" ? "bad" : "medium"}`}>{trade.status}</span>
                 </div>
-
                 <div className="mini-grid">
                   {renderStat("Direction", trade.direction)}
                   {renderStat("Entry", trade.entry)}
@@ -974,22 +807,13 @@ function App() {
       </div>
 
       <div className="result-section">
-        <div className="section-heading compact">
-          <p className="eyebrow">Paper trader log</p>
-          <h2>Latest actions</h2>
-        </div>
-
+        <div className="section-heading compact"><p className="eyebrow">Paper trader log</p><h2>Latest actions</h2></div>
         {paperLog.length === 0 ? (
-          <div className="empty-state">
-            <p>No log entries yet.</p>
-          </div>
+          <div className="empty-state"><p>No log entries yet.</p></div>
         ) : (
           <div className="journal-grid">
             {paperLog.map((log) => (
-              <div className="journal-card" key={log.id}>
-                <p className="eyebrow">{log.time}</p>
-                <p>{log.message}</p>
-              </div>
+              <div className="journal-card" key={log.id}><p className="eyebrow">{log.time}</p><p>{log.message}</p></div>
             ))}
           </div>
         )}
@@ -1002,10 +826,7 @@ function App() {
       <div className="section-heading">
         <p className="eyebrow">Saved trades</p>
         <h1>Trade Journal 2.0</h1>
-        <p>
-          Saved trades are stored in your browser, so they remain available even
-          if the backend restarts.
-        </p>
+        <p>Saved trades are stored in your browser, so they remain available even if the backend restarts.</p>
       </div>
 
       <section className="quick-stats">
@@ -1017,32 +838,18 @@ function App() {
         {renderStat("Average Lot Size", analytics.averageLots)}
       </section>
 
-      <div className="hero-actions">
-        <button className="secondary-btn" onClick={clearJournal}>
-          Clear Journal
-        </button>
-      </div>
+      <div className="hero-actions"><button className="secondary-btn" onClick={clearJournal}>Clear Journal</button></div>
 
       {journal.length === 0 ? (
-        <div className="empty-state">
-          <h2>No saved trades yet</h2>
-          <p>Save a trade from the assistant and it will appear here.</p>
-        </div>
+        <div className="empty-state"><h2>No saved trades yet</h2><p>Save a trade from the assistant and it will appear here.</p></div>
       ) : (
         <div className="journal-grid">
           {journal.map((trade, index) => (
             <div className="journal-card" key={trade.id || index}>
               <div className="card-title-row">
-                <div>
-                  <p className="eyebrow">{trade.saved_at || `Trade ${index + 1}`}</p>
-                  <h3>{trade.market_label || trade.pair}</h3>
-                </div>
-
-                <span className={`verdict-pill ${getVerdictClass(trade.verdict)}`}>
-                  {trade.verdict}
-                </span>
+                <div><p className="eyebrow">{trade.saved_at || `Trade ${index + 1}`}</p><h3>{trade.market_label || trade.pair}</h3></div>
+                <span className={`verdict-pill ${getVerdictClass(trade.verdict)}`}>{trade.verdict}</span>
               </div>
-
               <div className="mini-grid">
                 {renderStat("Trend", trade.trend)}
                 {renderStat("Score", trade.score)}
@@ -1051,10 +858,7 @@ function App() {
                 {renderStat("Risk", trade.risk_amount)}
                 {renderStat("News Risk", trade.news_risk || "normal")}
               </div>
-
-              <button className="secondary-btn refresh-btn" onClick={() => deleteTrade(trade.id)}>
-                Delete Trade
-              </button>
+              <button className="secondary-btn refresh-btn" onClick={() => deleteTrade(trade.id)}>Delete Trade</button>
             </div>
           ))}
         </div>
@@ -1066,18 +870,11 @@ function App() {
     <div className="about-card">
       <p className="eyebrow">About the platform</p>
       <h1>How this assistant works</h1>
-
       <p>
-        This app supports major forex pairs and gold. It analyzes the selected
-        market using moving averages, checks whether conditions are choppy,
-        calculates position size, runs Monte Carlo simulation, displays a live
-        market chart, and includes an automatic paper-trading engine.
+        This app supports major forex pairs and gold for manual analysis, but the automatic paper trader is currently restricted to EUR/USD because it performed best in recent backtests.
       </p>
-
       <p>
-        The Auto Paper Trader does not execute real trades. It is designed to
-        test whether the strategy is worth considering before any demo or live
-        broker integration.
+        The Auto Paper Trader does not execute real trades. It is designed to test whether the strategy is worth considering before any demo or live broker integration.
       </p>
     </div>
   );
@@ -1087,32 +884,15 @@ function App() {
       <aside className="sidebar">
         <div className="logo">
           <div className="logo-cube">FX</div>
-          <div>
-            <strong>Forex Assistant</strong>
-            <span>Forex + Gold</span>
-          </div>
+          <div><strong>Forex Assistant</strong><span>EUR/USD Auto Focus</span></div>
         </div>
 
         <nav>
-          <button className={activePage === "dashboard" ? "active" : ""} onClick={() => setActivePage("dashboard")}>
-            Dashboard
-          </button>
-
-          <button className={activePage === "assistant" ? "active" : ""} onClick={() => setActivePage("assistant")}>
-            Trade Assistant
-          </button>
-
-          <button className={activePage === "paper" ? "active" : ""} onClick={() => setActivePage("paper")}>
-            Auto Paper Trader
-          </button>
-
-          <button className={activePage === "journal" ? "active" : ""} onClick={() => setActivePage("journal")}>
-            Saved Trades
-          </button>
-
-          <button className={activePage === "about" ? "active" : ""} onClick={() => setActivePage("about")}>
-            About
-          </button>
+          <button className={activePage === "dashboard" ? "active" : ""} onClick={() => setActivePage("dashboard")}>Dashboard</button>
+          <button className={activePage === "assistant" ? "active" : ""} onClick={() => setActivePage("assistant")}>Trade Assistant</button>
+          <button className={activePage === "paper" ? "active" : ""} onClick={() => setActivePage("paper")}>Auto Paper Trader</button>
+          <button className={activePage === "journal" ? "active" : ""} onClick={() => setActivePage("journal")}>Saved Trades</button>
+          <button className={activePage === "about" ? "active" : ""} onClick={() => setActivePage("about")}>About</button>
         </nav>
       </aside>
 
